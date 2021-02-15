@@ -1,0 +1,542 @@
+---
+title: "Predicting Ticket Sales"
+author: "Abduvosid Malikov"
+output: bookdown::html_document2
+     
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This report aims to forecast 12 months ticket sales in the  swimming pools in the City of Albuquerque. For this, I use [ABQ swimming pool data](http://data.cabq.gov/community/swimmingpooladmissions/SwimmingPoolAdmissions CABQ en us.csv). 
+
+This report can be helpful for the owners of the swimming pools to plan ahead their supplying materials and forecast electricity, water and other material consumption beforehand.
+
+## Data cleaning and sample design
+
+Dataset consists of approximately 1.5 million transactions. The raw data is from January 1999 to November 2017. We use data from January 1, 2010 to December 31, 2016. Dataset contains the following variables: the number of tickets sold, the date and time of the transaction, the name of the swimming pool, the type of the ticket (teen, adult, senior), and a special category for discounts and events. 
+
+In data cleaning stage, I decided to focus on outdoor pools only (excluding Spray Pads). Overall, I filtered only these pools: East San Jose Pool, Montgomery Pool, Eisenhower Pool, Sierra Vista Pool, Rio Grande Pool, Wilson Pool, Sunport Pool. 
+
+I concentrated on usual types of tickets: adult, senior, teen, child, and toddler. Data is in the transaction-level in its raw form. This means each observation is one transaction that occurred in every 10 minutes or every hour. Since quantity sold is a flow variable, we take its sum per day and by doing so, we aggregate the transaction-level data into daily frequency. The **y variable** in this data is the quantity of tickets sold per day. Our daily time series data has 2557 observations that covers 7 years. There are few gaps in our data as in some days the pool is closed. 
+
+
+```{r, include = FALSE, message=FALSE, warning=FALSE}
+# Clear memory -------------------------------------------------------
+# rm(list=ls())
+
+# Import libraries ---------------------------------------------------
+# install.packages("bookdown")
+library(bookdown)
+library(rmdformats)
+library(tidyverse)
+library(stargazer)
+library(Hmisc)
+library(timeDate)
+library(lubridate)
+library(caret)
+library(prophet)
+library(dplyr) 
+library(kableExtra)
+library(huxtable)
+library(viridis)
+
+```
+
+
+
+
+```{r, include = FALSE, message=FALSE, warning=FALSE}
+setwd("D:/CEU/winter semester/data-analysis-3/da3_assignment3/")
+source("codes/da_helper_functions.R")
+source("codes/theme_bg.R")
+
+data_in <- "data/clean/"
+data_out <- "data/out/"
+output <- "data/out/" 
+
+daily_agg <- read.csv(file = paste(data_in,"swim_work.csv",sep="")) %>% 
+  mutate(date = as.Date(date))
+
+
+```
+
+## Feature Engineering
+
+### Seasonality
+My goal is to make a forecast for a year which is considered as a long horizon. Hence, the seasonality feature of time series is very important. For this, I add different variables for seasonality. These variables include year, quarter, month, day, day of the week. 
+
+Out of a single date variable, I also create different seasonal dummies such as school holiday, dummy variable that shows whether a day is a holiday or not. Now we have seasonal dummies that allow us to capture all kinds of seasonality. 
+
+
+Also, I created some other variables for the analysis that includes different versions of target variable (sales quantity). Its base form is quantity of tickets sold per day. I also added variable for monthly mean - average quantity of tickets sold by month and log level of quantity variable. Day of weeks and months were also added as a categorical variable. 
+
+
+### Trend line
+
+To see a linear trend that captures how number of tickets sold changes over time, I also included trend variable. 
+
+
+
+```{r, include = FALSE, message=FALSE, warning=FALSE}
+
+# dow: 1=Monday, weekend: Sat and Sun.
+daily_agg <- daily_agg %>%
+  mutate(year = year(date),
+         quarter = quarter(date),
+         month = factor(month(date)),
+         day = day(date)) %>%
+  mutate(dow = factor(lubridate::wday(date, week_start = getOption("lubridate.week.start", 1)))) %>%
+  mutate(weekend = factor(as.integer(dow %in% c(6,7))))
+
+# school holiday dummy variable
+
+daily_agg <- daily_agg %>% 
+  mutate(school_off = ((day>15 & month==5 & day <=30) | (month==6 |  month==7) |
+                         (day<15 & month==8) | (day>20 & month==12) ))
+
+# trend line
+daily_agg <- daily_agg %>% 
+  mutate(trend = c(1:dim(daily_agg)[1]))
+
+
+head(daily_agg)
+
+```
+
+Number of tickets sold varies from 0 to 1192 
+
+```{r, include = FALSE, warning=FALSE}
+
+sum_quant <- as_hux(summary(daily_agg$QUANTITY))
+sum_quant %>% 
+  restack_across(rows = 2) %>% 
+  set_caption("Summary of prices")
+
+```
+
+
+
+```{r, include = FALSE, message=FALSE, warning=FALSE}
+
+# Get holiday calendar ----------------------------------
+
+# December 24 January 6 - Christmas break
+# holidays_christmas <- as.Date(c(ChristmasDay(2010:2017))@Data)
+
+# daily_agg <- daily_agg %>% 
+# mutate(holidays_christmas = ((day >=  24 & month == 12 & day <= 31) | 
+#                                (day <= 6 & month == 1) ))
+
+holidays <-  as.Date(holidayNYSE(2010:2017))
+
+# dummy variable whether a day is a holiday or not  
+daily_agg <- daily_agg %>% 
+  mutate(isHoliday = ifelse(date %in% holidays,1,0))
+
+Hmisc::describe(daily_agg)
+
+#- predictors for seasonality and trend is ready
+
+```
+
+
+
+
+
+
+```{r, include = FALSE, message=FALSE, warning=FALSE}
+
+# Define vars for analysis ----------------------------------
+
+daily_agg <- 
+  daily_agg %>% 
+  group_by(month) %>% 
+  mutate(q_month = mean(QUANTITY)) %>% 
+  ungroup()
+
+# log level. QUANTITY<1 --> dates where 0 tickets sold gives -Inf, that's why leave Quantity as it is in such cases
+
+daily_agg <- daily_agg %>% 
+  mutate(QUANTITY2 = ifelse(QUANTITY<1, 1, QUANTITY)) %>% 
+  mutate(q_ln = log(QUANTITY2))
+
+#- mean of number of tickets sold, group by month
+
+daily_agg <- 
+  daily_agg %>% 
+  group_by(month, dow) %>% 
+  mutate(tickets = mean(QUANTITY),
+         tickets_ln = mean(q_ln)) %>% 
+  ungroup()
+
+
+
+# named date vars for graphs
+mydays <- c("Mon","Tue","Wed",
+            "Thu","Fri","Sat",
+            "Sun")
+
+# categories - factors, dummy variables
+daily_agg$dow_abb   <-factor(   mydays[daily_agg$dow],  levels=mydays)
+daily_agg$month_abb <-factor(month.abb[daily_agg$month],levels=month.abb)
+
+```
+
+
+## EDA
+
+To see the trends and seasonality, I made a plot for daily ticket sales over one year, 2015. Figure 1 shows that there were more ticket sales in summer months. 
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, fig.cap = "Daily ticket sales in 1 year"}
+
+# Descriptive graphs ----------
+g1 <-ggplot(data=daily_agg[daily_agg$year==2015,], aes(x=date, y=QUANTITY)) +
+  geom_line(size=0.4, color=color[1]) +
+  theme_bg() +
+  scale_x_date(breaks = as.Date(c("2015-01-01","2015-04-01","2015-07-01","2015-10-01","2016-01-01")),
+               labels = date_format("%d%b%Y"),
+               date_minor_breaks = "1 month" ) +
+  labs( x = "Date (day)", y="Daily ticket sales" ) +
+  scale_color_discrete(name = "")
+g1
+```
+
+Figure 2 shows sales in 5 years, from 2010 to 2014. It shows that there is a strong seasonal variation in each year. Again, we can see the spike in swimming pool ticket sales every summer. These time series plots show the existence and importance of monthly seasonality within years. On the other hand, it is difficult to see within week seasonality in these plots. The boxplots by months of the year and by days of the week solves this problem. 
+
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, fig.cap = "Daily ticket sales in 5 years"}
+
+g2<-ggplot(data=daily_agg[(daily_agg$year>=2010) & (daily_agg$year<=2014),], aes(x=date, y=QUANTITY)) +
+  geom_line(size=0.2, color=color[1]) +
+  theme_bg() +
+  scale_x_date(breaks = as.Date(c("2010-01-01","2011-01-01","2012-01-01","2013-01-01","2014-01-01","2015-01-01")),
+               labels = date_format("%d%b%Y"),
+               minor_breaks = "3 months") +
+  labs( x = "Date (day)", y="Daily ticket sales" ) +
+  scale_color_discrete(name = "")
+g2
+```
+
+
+Figure 3 is capturing the monthly distribution of ticket sales from 2010 to 2015. This boxplot shows relatively high number of visitors in the summer, especially in 3 months, June, July and August. The lowest amount of sales were captured from October until February.
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, fig.cap = "Monthly distribution"}
+
+g3<-ggplot(data=daily_agg, aes(x=month_abb, y=QUANTITY)) +
+  theme_bg() +
+  labs( x = "Date (month)", y="Daily ticket sales" ) +
+  geom_boxplot(color=color[1],outlier.color = color[4], outlier.alpha = 0.6, outlier.size = 0.4) + 
+  coord_cartesian(ylim = c(0, 900))
+g3
+```
+
+
+Figure 4 shows the day of week seasonality. We can see relatively low sales on Friday and  more sales on weekends. One of the reasons for this can the organization of events on Friday when tickets are not sold to individuals (teens, adults) on this day. 
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, fig.cap = "Day of week seasonality" }
+
+g4 <- ggplot(data=daily_agg, aes(x=dow_abb, y=QUANTITY)) +
+  theme_bg() +
+  labs( x = "Day of the week", y="Daily ticket sales" ) +
+  geom_boxplot(color=color[1],outlier.color = color[4], outlier.alpha = 0.6, outlier.size = 0.4) +
+  coord_cartesian(ylim = c(0, 200))
+#geom_boxplot(color=color[1], outlier.shape = NA)
+g4
+```
+
+To check for interactions between day of week and month, we can look at the heatmap in Figure 5. We have already seen that from May to August, the sales are relatively higher than in other months. 
+
+But this heatmap gives us some more knowledge. During school time, until May and after August, we have relatively small amount of sales in all days of the week. However in June, there is high sales in almost all days of the week, with relatively smaller amount of sales on Sundays. One of the reasons for this can be hot weather during summer time and more free time available for school children who are on vacation in these months.  
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, fig.cap = "Heatmap of interactions"}
+
+swim_heatmap <- 
+  ggplot(daily_agg, aes(x = dow_abb, y = month_abb, fill = tickets)) +
+  geom_tile(colour = "white") +
+  labs(x = 'Day of the week', y = 'Month ') +
+  scale_fill_viridis(alpha = 0.7, begin = 1, end = 0.2, direction = 1, option = "D") +
+  theme_bg() +
+  theme(legend.position = "right",
+        legend.text = element_text(size=6),
+        legend.title =element_text(size=6)
+  )
+swim_heatmap
+
+```
+
+
+
+## Model building and estimation
+
+Usually, in time series data, we take last section of a time series as a holdout set to see how our model will perform in the next year (or month, day). Therefore, I divided data into a work set with years 2010 to 2015 and a holdout set with year 2016. Holdout set will be helpful to know how our forecast model performs on the live data.
+
+Hence training data consists of 5 years: 2010 - 2015. 
+
+Based on the knowledge gained from descriptive graphs, I start building models. 
+
+Since seasonality causes to spurious association, I created monthly binary variables in Model 1. It has a trend and monthly binary variables. Model 2 adds day-of-the-week binary variables to the previous model. Model 3 adds holidays as a set of binary variables for each holiday in US. Model 4 also has a day-of-the-week binary variables interacted with the a binary variable for school holidays. Model 5 also has weekend dummy times monthly binary variables to capture the interaction of monthly and daily seasonality that was shown earlier. 
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+data_holdout<- daily_agg %>%
+  filter(year==2016)
+
+data_train <- daily_agg %>%
+  filter(year<2016)
+
+
+# Prepare for cross-validation
+#- label each row with a number
+data_train <- data_train %>% 
+  rownames_to_column() %>% 
+  mutate(rowname = as.integer(rowname))
+
+#- non-overlapping time-series for the test sets
+#- break up (split) yearly training data
+test_index_list <- data_train %>% 
+  split(f = factor(data_train$year)) %>% 
+  lapply(FUN = function(x){x$rowname})
+
+#- for each training set, we select rows which are not in test_index_list
+train_index_list <- test_index_list %>% 
+  lapply(FUN = function(x){setdiff(data_train$rowname, x)})
+
+# we set the training set by taking observations that are not in the test set
+
+# controls how train set works
+# savePredictions = TRUE
+train_control <- trainControl(
+  method = "cv",
+  index = train_index_list, #index of train data for each fold
+  savePredictions = TRUE
+)
+```
+
+
+
+We will see the fit for several models and we test best model we found on holdout set. I use cross-validation to find the best performing model. For this, there are two approaches: inserted test sets (forecasts that don't use serial correlation) or rolling windows training-test sets (forecasts that use serial correlation). In first approach we always look at the last section of time-series as a test set. In second approach, we start with year of data, test it on a month or two, and roll over 2010 and 2015. I used inserted test sets approach. Since we are not interested in the pattern of association between variables, I will skip the explanation of the values of model's coefficients. 
+
+Table 1 shows that model with the smallest RMSE (106.3) - Model 5 is the best model. We choose this model for forecasting. 
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, fig.cap = "Average RMSE" }
+
+# Fit models on the training set---------------------------------------------------------
+# Start specifying models
+
+#Model 1 linear trend + monthly seasonality
+model1 <- as.formula(QUANTITY ~ 1 + trend + month)
+reg1 <- train(
+  model1,
+  method = "lm",
+  data = data_train,
+  trControl = train_control
+)
+
+#Model 2 linear trend + monthly seasonality + days of week seasonality 
+model2 <- as.formula(QUANTITY ~ 1 + trend + month + dow)
+reg2 <- train(
+  model2,
+  method = "lm",
+  data = data_train,
+  trControl = train_control
+)
+
+#Model 3 linear trend + monthly seasonality + days of week  seasonality + holidays 
+model3 <- as.formula(QUANTITY ~ 1 + trend + month + dow + isHoliday)
+reg3 <- train(
+  model3,
+  method = "lm",
+  data = data_train,
+  trControl = train_control
+)
+
+#Model 4 linear trend + monthly seasonality + days of week  seasonality + holidays + sch*dow
+model4 <- as.formula(QUANTITY ~ 1 + trend + month + dow + isHoliday + school_off*dow)
+reg4 <- train(
+  model4,
+  method = "lm",
+  data = data_train,
+  trControl = train_control
+)
+
+#Model 5 linear trend + monthly seasonality + days of week  seasonality + holidays + interactions
+model5 <- as.formula(QUANTITY ~ 1 + trend + month + dow + isHoliday + school_off*dow + weekend*month)
+reg5 <- train(
+  model5,
+  method = "lm",
+  data = data_train,
+  trControl = train_control
+)
+
+#Model 6 =  multiplicative trend and seasonality (ie take logs, predict log values and transform back with correction term)
+model6 <- as.formula(q_ln ~ 1 + trend + month + dow + isHoliday + school_off*dow)
+reg6 <- train(
+  model6,
+  method = "lm",
+  data = data_train,
+  trControl = train_control
+)
+
+
+# stargazer(reg2$finalModel, reg3$finalModel, reg4$finalModel, reg5$finalModel, 
+#           out=paste(output,"Ch18_swim_tsregs.txt",sep=""), type = "text", digits=2)
+# stargazer(reg6$finalModel, 
+#           out=paste(output,"Ch18_swim_tsregs2.txt",sep=""), type = "text", digits=2)
+
+
+# Get CV RMSE ----------------------------------------------
+#- MSE is an average of the forecast errors over 12 months
+model_names <- c("reg1","reg2","reg3","reg4","reg5")
+rmse_CV <- c()
+
+for (i in model_names) {
+  rmse_CV[i]  <- get(i)$results$RMSE
+}
+rmse_CV %>% kbl(caption = "<center><strong> Average RMSE  for 5 Models</strong></center>", escape = FALSE) %>%
+  kable_classic(full_width = F, html_font = "Cambria") %>%
+  kable_styling( position = "center")
+
+#had to cheat and use train error on full train set because
+
+```
+
+
+## Model evaluation 
+
+I evaluate the fit of winning model - Model 5 on holdout set. 
+
+RMSE of Model 5 in holdout set RMSE = 96. Its RMSE is lower than it was in the cross-validation. This is a good news indicating this model can perfrom well in live data as well. 
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+data_holdout <- data_holdout %>% 
+  mutate(y_hat_5 = predict(reg5, newdata = .))
+
+rmse_holdout_best <- RMSE(data_holdout$QUANTITY, data_holdout$y_hat_5)
+# rmse_holdout_best
+
+```
+
+
+## Prediction
+
+In this section, I start inspecting the predictions using the selected model. 
+
+This graph shows the relative RMSE on the holdout set for each each month in  This figure shows that the model demonstrates almost the same way in all months which is a good sign. However it makes large errors is December. This can be possibly explained by variations in daily routine in the Christmas break.
+
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, fig.cap = "Monthly RMSE in 2016"}
+rmse_monthly <- data_holdout %>% 
+  mutate(month = factor(format(date,"%b"), 
+                        levels= unique(format(sort(.$date),"%b")), 
+                        ordered=TRUE)) %>% 
+  group_by(month) %>% 
+  summarise(
+    RMSE = RMSE(QUANTITY, y_hat_5),
+    RMSE_norm= RMSE(QUANTITY, y_hat_5)/mean(QUANTITY)
+  ) 
+
+g_predictions_rmse<- ggplot(rmse_monthly, aes(x = month, y = RMSE_norm)) +
+  geom_col(bg=color[1], color=color[1]) +
+  labs( x = "Date (month)", y="RMSE (normalized by monthly sales)" ) +
+  theme_bg() 
+g_predictions_rmse
+```
+
+
+Figure 7 shows that the selected model is good at capturing different seasonalities in general. However, it is not performing well at capturing very small and very big values. We can even see some predicted values below the zero. This can be caused by the error in the data or it can require the improvement in the model. This can be fixed with further investigation.  
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, fig.cap = "Daily swimming pool ticket volume forecasts"}
+
+g_predictions<-
+  ggplot(data=data_holdout, aes(x=date, y=QUANTITY)) +
+  geom_line(aes(size="Actual", colour="Actual", linetype = "Actual") ) +
+  geom_line(aes(y=y_hat_5, size="Predicted" ,colour="Predicted",  linetype= "Predicted")) +
+  scale_y_continuous(expand = c(0,0))+
+  scale_x_date(expand=c(0,0), breaks = as.Date(c("2016-01-01","2016-03-01","2016-05-01","2016-07-01","2016-09-01","2016-11-01", "2017-01-01")),
+               labels = date_format("%d%b%Y"),
+               date_minor_breaks = "1 month" )+
+  scale_color_manual(values=color[1:2], name="")+
+  scale_size_manual(name="", values=c(0.4,0.7))+
+  #scale_linetype_manual(name = "", values=c("solid", "solid")) +
+  scale_linetype_manual(name = "", values=c("solid", "twodash")) +
+  labs( x = "Date (day)", y="Daily ticket sales" ) +
+  theme_bg() +
+  #theme(legend.position = "none") +
+  #annotate("text", x = as.Date("2016-07-15"), y = 50, label = "Predicted", color=color[2], size=3)+
+  #annotate("text", x = as.Date("2016-09-01"), y = 125, label = "Actual", color=color[1], size=3)
+  theme(legend.position=c(0.7,0.8),
+        legend.direction = "horizontal",
+        legend.text = element_text(size = 6),
+        legend.key.width = unit(.8, "cm"),
+        legend.key.height = unit(.3, "cm")) + 
+  guides(linetype = guide_legend(override.aes = list(size = 0.8))
+  )
+g_predictions
+
+```
+
+In Figure 8, we can see actual versus predicted ticket volumes for February 2016. Not only this plot shows the predicted values with deeper focus in one month, but it also shows area that is helpful to see the total error made in each period of time.  
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE, fig.cap = "Predicted versus actual in February 2016"}
+
+g_predictions_m <- ggplot(data=data_holdout %>% filter(month==2), aes(x=date, y=QUANTITY)) +
+  geom_line(aes(size="Actual", colour="Actual", linetype = "Actual") ) +
+  geom_line(aes(y=y_hat_5, size="Predicted" ,colour="Predicted",  linetype= "Predicted")) +
+  geom_ribbon(aes(ymin=QUANTITY,ymax=y_hat_5), fill=color[4], alpha=0.3) +
+  scale_y_continuous(expand = c(0.01,0.01), limits = c(0,150))+
+  scale_x_date(expand=c(0.01,0.01), breaks = as.Date(c("2016-02-01","2016-02-08","2016-02-15","2016-02-22","2016-02-29")),
+               limits = as.Date(c("2016-02-01","2016-02-31")),
+               labels = date_format("%d%b")) +
+  scale_color_manual(values=color[1:2], name="")+
+  scale_size_manual(name="", values=c(0.4,0.7))+
+  #scale_linetype_manual(name = "", values=c("solid", "solid")) +
+  scale_linetype_manual(name = "", values=c("solid", "twodash")) +
+  labs( x = "Date (day)", y="Daily ticket sales" ) +
+  theme_bg() +
+  #theme(legend.position = "none") +
+  #annotate("text", x = as.Date("2016-08-04"), y = 55, label = "Actual", color=color[2], size=2)+
+  #annotate("text", x = as.Date("2016-08-17"), y = 115, label = "Predicted", color=color[1], size=2)
+  theme(legend.position=c(0.7,0.8),
+        legend.direction = "horizontal",
+        legend.text = element_text(size = 4),
+        legend.key.width = unit(.8, "cm"),
+        legend.key.height = unit(.2, "cm")) + 
+  guides(linetype = guide_legend(override.aes = list(size = 0.6))
+  )
+g_predictions_m
+```
+
+Table 2 lists each month of 2016 and shows both predicted and actual total sales in each month in 2016. Overall, we can see that both values are very close to each other in all months. However, as it was detected earlier with RMSE, in December we underfit the data and predicted twice as low sales compared to actual sales.
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+
+data_demo = data_holdout
+#  Get months
+data_demo$Months <- months(data_holdout$date)
+
+some_item2 <- aggregate( cbind(y_hat_5, QUANTITY) ~ Months + year , data_demo, sum ) 
+
+some_item2 %>% kbl(caption = "<center><strong> Predicting for 12 months in 2016</strong></center>", escape = FALSE) %>%
+  kable_classic(full_width = F, html_font = "Cambria") %>%
+  kable_styling( position = "center")
+
+```
+
+## Summary
+
+The aim of this analysis was to predict 12 month ticket sales in outdoor swimming pools. I used administrative transaction-level data for seven years, which later  aggregated to daily data after cleaning. From this data, I  kept the last year as holdout set and the rest as a work set. From the work set, complete years were selected as test sets and all other observations as the corresponding training sets and test sets. 
+
+Different models were specified to capture the features of the time series - trend and seasonality. Months, days of the week, school holidays were added for seasonality and some more complicated models contained interactions as well. Then, I found out that model with interacted seasonality and school holidays was the best. At the end, I evaluated the best prediction on the holdout set and found that it captured the patterns of seasonality very well. However there was a high error in predicting the ticket sales in December. 
+
+To conclude, it is reasonable to rely on this model to forecast the ticket sales for 12 months ahead. However, there is one more thing that should be mentioned. In 2020, pandemic hit the world. All kinds of gatherings were banned and swimming pools were closed. This kind of unpredictable events causes to irreducible prediction error and we should keep it mind when generalizing our output for different locations and years. But if swimming pools reopen in 2021, the time-series may follow the pattern from previous years where the model can perform reasonably well again. 
+
+
+
+
+

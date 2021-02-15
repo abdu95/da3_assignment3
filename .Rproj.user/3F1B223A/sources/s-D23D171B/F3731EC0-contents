@@ -1,0 +1,96 @@
+---
+title: "Predicting Ticket Sales"
+author: "Abduvosid Malikov"
+output: 
+  html_document:
+     rmdformats::robobook
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This report aims to forecast 12 months ticket sales in the  swimming pools in the City of Albuquerque. For this, I use [ABQ swimming pool data](http://data.cabq.gov/community/swimmingpooladmissions/SwimmingPoolAdmissions CABQ en us.csv). 
+
+This report can be helpful for the owners of the swimming pools to plan ahead their supplying materials and forecast electricity, water and other material consumption beforehand.
+
+## Data cleaning and sample design
+
+Dataset consists of approximately 1.5 million transactions. The raw data is from January 1999 to November 2017. We use data from January 1, 2010 to December 31, 2016. Dataset contains the following variables: the number of tickets sold, the date and time of the transaction, the name of the swimming pool, the type of the ticket (teen, adult, senior), and a special category for discounts and events. 
+
+In data cleaning stage, I decided to focus on outdoor pools only (excluding Spray Pads). Overall, I filtered only these pools: East San Jose Pool, Montgomery Pool, Eisenhower Pool, Sierra Vista Pool, Rio Grande Pool, Wilson Pool, Sunport Pool. 
+
+I concentrated on usual types of tickets: adult, senior, teen, child, and toddler. Data is in the transaction-level in its raw form. This means each observation is one transaction that occurred in every 10 minutes or every hour. Since quantity sold is a flow variable, we take its sum per day and by doing so, we aggregate the transaction-level data into daily frequency. The **y variable** in this data is the quantity of tickets sold per day. Our daily time series data has 2557 observations that covers 7 years. There are few gaps in our data as in some days the pool is closed. 
+
+Usually, in time series data, we take last section of a time series as a holdout set to see how our model will perform in the next year (or month, day). Therefore, I divided data into a work set with years 2010 to 2015 and a holdout set with year 2016. 
+
+
+```{r, include = FALSE, message=FALSE, warning=FALSE}
+# Clear memory -------------------------------------------------------
+# rm(list=ls())
+
+# Import libraries ---------------------------------------------------
+library(tidyverse)
+library(stargazer)
+library(Hmisc)
+library(timeDate)
+library(lubridate)
+library(caret)
+library(prophet)
+library(dplyr) 
+
+```
+
+
+```{r, include = FALSE, message=FALSE, warning=FALSE}
+setwd("D:/CEU/winter semester/data-analysis-3/da3_assignment3/")
+source("codes/da_helper_functions.R")
+source("codes/theme_bg.R")
+
+data_in <- "data/clean/"
+data_out <- "data/out/"
+output <- "data/out/" 
+
+```
+
+
+```{r, include = FALSE, message=FALSE, warning=FALSE}
+
+daily_agg <- read.csv("../data/clean/swim_work.csv",sep="") %>% 
+  mutate(date = as.Date(date))
+head(daily_agg)
+```
+
+## Feature Engineering
+
+
+- seasonality features of time series is important for us because we are forecasting for a year, long horizon)
+- We start adding variables for seasonality
+- We will consider different variables
+- We create the following columns: year, quarter, month, day, day of the week
+create different seasonal dummies out of a single variable
+
+
+
+## EDA
+
+## Model building
+Since seasonality causes to spurious association, we created monthly binary variables in Model 1.
+
+
+
+## Summary
+
+
+In 2020, pandemic hit the world. All kinds of gatherings were banned and swimming pools were closed. This kind of unpredictable events causes to irreducible prediction error and we should keep it mind when generalizing our output for different locations and years. 
+But if swimming pools reopen in 2021, the time-series may follow the pattern from previous years. 
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
