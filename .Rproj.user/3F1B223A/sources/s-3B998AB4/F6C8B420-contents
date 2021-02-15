@@ -66,7 +66,7 @@ daily_agg <- read.csv(file = paste(data_in,"swim_work.csv",sep="")) %>%
 
 ## Feature Engineering
 
-### Seasonality
+#### Seasonality
 My goal is to make a forecast for a year which is considered as a long horizon. Hence, the seasonality feature of time series is very important. For this, I add different variables for seasonality. These variables include year, quarter, month, day, day of the week. 
 
 Out of a single date variable, I also create different seasonal dummies such as school holiday, dummy variable that shows whether a day is a holiday or not. Now we have seasonal dummies that allow us to capture all kinds of seasonality. 
@@ -75,7 +75,7 @@ Out of a single date variable, I also create different seasonal dummies such as 
 Also, I created some other variables for the analysis that includes different versions of target variable (sales quantity). Its base form is quantity of tickets sold per day. I also added variable for monthly mean - average quantity of tickets sold by month and log level of quantity variable. Day of weeks and months were also added as a categorical variable. 
 
 
-### Trend line
+#### Trend line
 
 To see a linear trend that captures how number of tickets sold changes over time, I also included trend variable. 
 
@@ -536,7 +536,7 @@ Different models were specified to capture the features of the time series - tre
 
 To conclude, it is reasonable to rely on this model to forecast the ticket sales for 12 months ahead. However, there is one more thing that should be mentioned. In 2020, pandemic hit the world. All kinds of gatherings were banned and swimming pools were closed. This kind of unpredictable events causes to irreducible prediction error and we should keep it mind when generalizing our output for different locations and years. But if swimming pools reopen in 2021, the time-series may follow the pattern from previous years where the model can perform reasonably well again. 
 
+## Appendix
 
-
-
+Link to the code: https://github.com/abdu95/da3_assignment3 
 

@@ -209,14 +209,14 @@ summary {
 </div>
 <div id="feature-engineering" class="section level2" number="0.3">
 <h2><span class="header-section-number">0.3</span> Feature Engineering</h2>
-<div id="seasonality" class="section level3" number="0.3.1">
-<h3><span class="header-section-number">0.3.1</span> Seasonality</h3>
+<div id="seasonality" class="section level4" number="0.3.0.1">
+<h4><span class="header-section-number">0.3.0.1</span> Seasonality</h4>
 <p>My goal is to make a forecast for a year which is considered as a long horizon. Hence, the seasonality feature of time series is very important. For this, I add different variables for seasonality. These variables include year, quarter, month, day, day of the week.</p>
 <p>Out of a single date variable, I also create different seasonal dummies such as school holiday, dummy variable that shows whether a day is a holiday or not. Now we have seasonal dummies that allow us to capture all kinds of seasonality.</p>
 <p>Also, I created some other variables for the analysis that includes different versions of target variable (sales quantity). Its base form is quantity of tickets sold per day. I also added variable for monthly mean - average quantity of tickets sold by month and log level of quantity variable. Day of weeks and months were also added as a categorical variable.</p>
 </div>
-<div id="trend-line" class="section level3" number="0.3.2">
-<h3><span class="header-section-number">0.3.2</span> Trend line</h3>
+<div id="trend-line" class="section level4" number="0.3.0.2">
+<h4><span class="header-section-number">0.3.0.2</span> Trend line</h4>
 <p>To see a linear trend that captures how number of tickets sold changes over time, I also included trend variable.</p>
 <p>Number of tickets sold varies from 0 to 1192</p>
 </div>
@@ -558,6 +558,10 @@ September
 <p>The aim of this analysis was to predict 12 month ticket sales in outdoor swimming pools. I used administrative transaction-level data for seven years, which later aggregated to daily data after cleaning. From this data, I kept the last year as holdout set and the rest as a work set. From the work set, complete years were selected as test sets and all other observations as the corresponding training sets and test sets.</p>
 <p>Different models were specified to capture the features of the time series - trend and seasonality. Months, days of the week, school holidays were added for seasonality and some more complicated models contained interactions as well. Then, I found out that model with interacted seasonality and school holidays was the best. At the end, I evaluated the best prediction on the holdout set and found that it captured the patterns of seasonality very well. However there was a high error in predicting the ticket sales in December.</p>
 <p>To conclude, it is reasonable to rely on this model to forecast the ticket sales for 12 months ahead. However, there is one more thing that should be mentioned. In 2020, pandemic hit the world. All kinds of gatherings were banned and swimming pools were closed. This kind of unpredictable events causes to irreducible prediction error and we should keep it mind when generalizing our output for different locations and years. But if swimming pools reopen in 2021, the time-series may follow the pattern from previous years where the model can perform reasonably well again.</p>
+</div>
+<div id="appendix" class="section level2" number="0.9">
+<h2><span class="header-section-number">0.9</span> Appendix</h2>
+<p>Link to the code: <a href="https://github.com/abdu95/da3_assignment3" class="uri">https://github.com/abdu95/da3_assignment3</a></p>
 </div>
 
 
